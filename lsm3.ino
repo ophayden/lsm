@@ -12,6 +12,7 @@ const int n_samples = 200;
 // If the angle offset from center is greater than this, then start balancing
 const double balance_window = 0.5;
 
+const int loop_time_length = 4000;
 // END OF CONFIG
 
 // REGISTER PORTS
@@ -46,21 +47,29 @@ const double balance_window = 0.5;
 // GLOBALS
 double y_g_calibration;
 
-float pgain = 15;
-float igain = 1.5;
-float dgain = 10;
-float gangle, adjuster;
+const double pgain = 15;
+const double igain = 1.5;
+const double dgain = 10;
+double gangle, adjuster;
 
 byte balance;
 
-float pid_p, pid_i, pid_d;
+double pid_i;
 
-int motr, stepr, pulsecountr, pulsememr;
-int motl, stepl, pulsecountl, pulsememl;
-float error, sp, output, pidde;
-float outputl, outputr;
+int motr = 0,
+  stepr = 0,
+  pulsecountr = 0,
+  pulsememr = 0;
 
-unsigned long looptime;
+int motl = 0,
+  stepl = 0,
+  pulsecountl = 0,
+  pulsememl = 0;
+
+double err, output, pidde;
+double outputl, outputr;
+
+unsigned long loop_time;
 
 void setup()
 {
@@ -99,7 +108,7 @@ void setup()
     delayMicroseconds(3000);
   }
   y_g_calibration /= n_samples;
-  looptime = micros() + 4000;
+  loop_time = micros() + 4000;
 
   // timer registers
   #ifndef INTERRUPT
@@ -115,6 +124,15 @@ void setup()
 
 void loop()
 {
+  #ifdef INTERRUPT
+  PORTD |= 0b10000000;
+  PORTD &= 0b01111111;
+  #else
+  if (loop_time > micros())
+    return;
+  loop_time += loop_time_length;
+  #endif
+
   // read from accelerometer
   Wire.beginTransmission(lsm);
   Wire.write(axl);
@@ -164,25 +182,24 @@ void loop()
   //gangle = aangle;
 
   //pid
-  error = gangle - adjuster - sp;
+  err = gangle - adjuster;
   if (output > 5 || output < -5)
   {
-    error += output * 0.0045;
+    err += output * 0.0045;
   }
-  pid_i += igain * error;
+  pid_i += igain * err;
   //if(pid_i > 400)pid_i = 400;
   //else if(pid_i < -400)pid_i = -400;
-  //p = error
-  pid_p = pgain * error;
-  pid_d = dgain * (error - pidde);
-  output = pid_p + pid_i + dgain * (error - pidde);
+  //p = err
+  const double pid_p = pgain * err;
+  output = pid_p + pid_i + dgain * (err - pidde);
 
   if (output > 500)
     output = 500;
   else if (output < -500)
     output = -500;
 
-  pidde = error;
+  pidde = err;
 
   if (output < 10 && output > -10)
   {
@@ -205,20 +222,20 @@ void loop()
   delay(20);
   //*/
 
-  if (sp == 0 && output < 0)
+  if (output < 0)
     adjuster += 0.015;
-  if (sp == 0 && output > 0)
+  if (output > 0)
     adjuster -= 0.015;
 
   if (outputl > 0)
-    outputl = 203 - (1 / (outputl + 9)) * 2750;
+    outputl = 203 - 2750 / (outputl + 9);
   else if (outputl < 0)
-    outputl = -203 - (1 / (outputl - 9)) * 2750;
+    outputl = -203 - 2750 / (outputl - 9);
 
   if (outputr > 0)
-    outputr = 203 - (1 / (outputr + 9)) * 2750;
+    outputr = 203 - 2750 / (outputr + 9);
   else if (outputr < 0)
-    outputr = -203 - (1 / (outputr - 9)) * 2750;
+    outputr = -203 - 2750 / (outputr - 9);
 
   if (outputl > 0)
     motl = 200 - outputl;
@@ -233,48 +250,17 @@ void loop()
     motr = -200 - outputr;
   else
     motr = 0;
-  /*
-  if(outputl > 0)outputl = 505 - (1/(outputl + 9)) * 5500;
-  else if(outputl < 0)outputl = -505 - (1/(outputl - 9)) * 5500;
 
-  if(outputr > 0)outputr = 505 - (1/(outputr + 9)) * 5500;
-  else if(outputr < 0)outputr = -505 - (1/(outputr - 9)) * 5500;
-
-  if(outputl > 0)motl = 500 - outputl;
-  else if(outputl < 0)motl = -500 - outputl;
-  else motl = 0;
-
-  if(outputr > 0)motr = 500 - outputr;
-  else if(outputr < 0)motr = -500 - outputr;
-  else motr = 0;*/
+  noInterrupts();
   stepl = motl;
   stepr = motr;
-
-  #ifdef INTERRUPT
-
-  PORTD |= 0b10000000;
-  PORTD &= 0b01111111;
-
-  #else
-
-  while (looptime > micros());
-  looptime += 2000;
-
-  #endif
+  interrupts();
 }
 
-void toggleBlink() {
+inline void toggleBlink() {
   const auto &currentValue = digitalRead(LED_PIN);
   digitalWrite(LED_PIN, !currentValue);
 }
-
-/*
-int adjustment(){
-    int read = analogRead(A0);
-    int mapread = map(read, 0, 1023, 0, 1400);
-    return mapread;
-}
-//*/
 
 ISR(TIMER2_COMPA_vect)
 {
