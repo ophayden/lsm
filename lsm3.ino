@@ -4,7 +4,7 @@
 // CONFIG
 // comment this out to stop interrupts. This makes loop be called as fast as
 // possible.
-//#define INTERRUPT
+#define NOINTERRUPT
 
 // Number of samples taken to calibrate the gyroscope
 const int n_samples = 200;
@@ -80,9 +80,12 @@ void setup()
   TWBR = 12;
 
   // pinMode 2, 3, 4, 5 set to OUTPUT
-  DDRD |= 0b00111100;
   // pinMode 13 set to OUTPUT
-  DDRB |= 0b00100000;
+  pinMode(2, OUTPUT);
+  pinMode(3, OUTPUT);
+  pinMode(4, OUTPUT);
+  pinMode(5, OUTPUT);
+  pinMode(13, OUTPUT);
 
   // configure device
   Wire.beginTransmission(lsm);
@@ -111,7 +114,7 @@ void setup()
   loop_time = micros() + 4000;
 
   // timer registers
-  #ifndef INTERRUPT
+  #ifndef NOINTERRUPT
   TCNT2 = 0;
   TCCR2A = 0;
   TCCR2B = 0;
@@ -124,7 +127,7 @@ void setup()
 
 void loop()
 {
-  #ifdef INTERRUPT
+  #ifdef NOINTERRUPT
   PORTD |= 0b10000000;
   PORTD &= 0b01111111;
   #else
