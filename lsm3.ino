@@ -4,7 +4,7 @@
 // CONFIG
 // comment this out to stop interrupts. This makes loop be called as fast as
 // possible.
-#define NOINTERRUPT
+//#define NOINTERRUPT
 
 // Number of samples taken to calibrate the gyroscope
 const int n_samples = 200;
