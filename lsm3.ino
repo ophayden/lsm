@@ -12,7 +12,14 @@ const int n_samples = 200;
 // If the angle offset from center is greater than this, then start balancing
 const double balance_window = 0.5;
 
+// microseconds before next pid tick
 const int loop_time_length = 4000;
+
+// pid params
+constexpr double pgain = 15;
+constexpr double igain = 1.5;
+constexpr double dgain = 10;
+
 // END OF CONFIG
 
 // REGISTER PORTS
@@ -35,39 +42,24 @@ const int loop_time_length = 4000;
 #define gzl 0x1C
 #define gzh 0x1D
 
+#define whoami 0xF0
+
 // wheel radius
 // r = 204.2mm
 
 // UTIL
-#define TO_DEG 180.0 / M_PI
-#define TO_RAD M_PI / 180.0
-
-#define whoami 0xF0
+constexpr double to_deg = 180.0 / M_PI;
 
 // GLOBALS
-double y_g_calibration;
 
-const double pgain = 15;
-const double igain = 1.5;
-const double dgain = 10;
-double gangle, adjuster;
-
+double gangle, adjuster, pid_i, pidde, y_g_calibration;
 byte balance;
-
-double pid_i;
-
-int motr = 0,
-  stepr = 0,
-  pulsecountr = 0,
-  pulsememr = 0;
-
-int motl = 0,
-  stepl = 0,
-  pulsecountl = 0,
-  pulsememl = 0;
-
-double err, output, pidde;
-double outputl, outputr;
+int stepr = 0,
+    pulsecountr = 0,
+    pulsememr = 0;
+int stepl = 0,
+    pulsecountl = 0,
+    pulsememl = 0;
 
 unsigned long loop_time;
 
@@ -172,7 +164,7 @@ void loop()
   delay(20);
   //*/
 
-  double aangle = asin(ax) * TO_DEG;
+  double aangle = asin(ax) * to_deg;
 
   if (balance == 0 && aangle > -balance_window && aangle < balance_window)
   {
@@ -185,17 +177,10 @@ void loop()
   //gangle = aangle;
 
   //pid
-  err = gangle - adjuster;
-  if (output > 5 || output < -5)
-  {
-    err += output * 0.0045;
-  }
+  double err = gangle - adjuster;
   pid_i += igain * err;
-  //if(pid_i > 400)pid_i = 400;
-  //else if(pid_i < -400)pid_i = -400;
-  //p = err
   const double pid_p = pgain * err;
-  output = pid_p + pid_i + dgain * (err - pidde);
+  double output = pid_p + pid_i + dgain * (err - pidde);
 
   if (output > 500)
     output = 500;
@@ -204,7 +189,7 @@ void loop()
 
   pidde = err;
 
-  if (output < 10 && output > -10)
+  if (output < 5 && output > -5)
   {
     output = 0;
   }
@@ -216,8 +201,6 @@ void loop()
     balance = 0;
     adjuster = 0;
   }
-  outputl = output;
-  outputr = output;
 
   /*
   Serial.println(output);
@@ -230,34 +213,30 @@ void loop()
   if (output > 0)
     adjuster -= 0.015;
 
-  if (outputl > 0)
-    outputl = 203 - 2750 / (outputl + 9);
-  else if (outputl < 0)
-    outputl = -203 - 2750 / (outputl - 9);
-
-  if (outputr > 0)
-    outputr = 203 - 2750 / (outputr + 9);
-  else if (outputr < 0)
-    outputr = -203 - 2750 / (outputr - 9);
-
-  if (outputl > 0)
-    motl = 200 - outputl;
-  else if (outputl < 0)
-    motl = -200 - outputl;
-  else
-    motl = 0;
-
-  if (outputr > 0)
-    motr = 200 - outputr;
-  else if (outputr < 0)
-    motr = -200 - outputr;
-  else
-    motr = 0;
+  double motl = calc_mot(output);
+  double motr = motl; // calc_mot(output);
 
   noInterrupts();
   stepl = motl;
   stepr = motr;
   interrupts();
+}
+
+inline double calc_mot(double output) {
+  double mot;
+
+  if (output > 0)
+    output = 203 - 2750 / (output + 9);
+  else if (output < 0)
+    output = -203 - 2750 / (output - 9);
+
+  if (output > 0)
+    mot = 200 - output;
+  else if (output < 0)
+    mot = -200 - output;
+  else
+    mot = 0;
+  return mot;
 }
 
 inline void toggleBlink() {
