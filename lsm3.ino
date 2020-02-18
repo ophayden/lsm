@@ -17,15 +17,15 @@ const int loop_time_length = 4000;
 
 // pid params
 constexpr double pgain = 15;
-constexpr double igain = 1.5;
-constexpr double dgain = 10;
+constexpr double igain = .5;
+constexpr double dgain = 30;
 
 // END OF CONFIG
+#define lsm 0x6B // i2c address of sparkfun sensor
+// registers
 
-// REGISTER PORTS
-#define lsm 0x6B
 #define LED_PIN 13
-#define BOD_RATE 9600
+#define BAUD 9600
 #define CTRL_REG1_G 0x10
 
 #define axl 0x28
@@ -61,11 +61,13 @@ int stepl = 0,
     pulsecountl = 0,
     pulsememl = 0;
 
+int remote, remote_counter;
+
 unsigned long loop_time;
 
 void setup()
 {
-  Serial.begin(BOD_RATE);
+  Serial.begin(BAUD);
   Wire.begin();
 
   // set i2c clock frequency
@@ -127,6 +129,15 @@ void loop()
     return;
   loop_time += loop_time_length;
   #endif
+
+  if(Serial.avialable()){
+    remote = Serial.read();
+    remote_counter = 0;
+  }
+  if(remote_counter <= 25) remote_counter ++;
+  else remote_counter = 0;
+  
+
 
   // read from accelerometer
   Wire.beginTransmission(lsm);
@@ -208,11 +219,11 @@ void loop()
   delay(20);
   //*/
 
-  if (output < 0)
+ /* if (output < 0)
     adjuster += 0.015;
   if (output > 0)
     adjuster -= 0.015;
-
+*/
   double motl = calc_mot(output);
   double motr = motl; // calc_mot(output);
 
@@ -226,9 +237,9 @@ inline double calc_mot(double output) {
   double mot;
 
   if (output > 0)
-    output = 203 - 2750 / (output + 9);
+    output = 203 - 2750 / (output + 20);
   else if (output < 0)
-    output = -203 - 2750 / (output - 9);
+    output = -203 - 2750 / (output - 20);
 
   if (output > 0)
     mot = 200 - output;
