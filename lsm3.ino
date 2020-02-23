@@ -1,31 +1,11 @@
 #include <math.h>
 #include <Wire.h>
+#include <SoftwareSerial.h>
 
-// CONFIG
-// comment this out to stop interrupts. This makes loop be called as fast as
-// possible.
-//#define NOINTERRUPT
-
-// Number of samples taken to calibrate the gyroscope
-const int n_samples = 200;
-
-// If the angle offset from center is greater than this, then start balancing
-const double balance_window = 0.5;
-
-// microseconds before next pid tick
-const int loop_time_length = 4000;
-
-// pid params
-constexpr double pgain = 15;
-constexpr double igain = .5;
-constexpr double dgain = 30;
-
-// END OF CONFIG
 #define lsm 0x6B // i2c address of sparkfun sensor
-// registers
 
+// registers
 #define LED_PIN 13
-#define BAUD 9600
 #define CTRL_REG1_G 0x10
 
 #define axl 0x28
@@ -44,30 +24,69 @@ constexpr double dgain = 30;
 
 #define whoami 0xF0
 
-// wheel radius
-// r = 204.2mm
+SoftwareSerial hco6(10, 11); //10 is rx, 11 is tx
+
+
+// CONFIG
+
+// comment this out to stop interrupts
+//#define NOINTERRUPT
+
+
+
+// If the angle is in this window, then start balancing
+const double balance_window = 0.5;
+
+// if the pid output is in this window, round it to zero
+const double dead_window = 5;
+
+// period of loop in microseconds
+const int period_us = 4000;
+
+// pid gains
+//constexpr double pgain = 15;
+//constexpr double igain = 1.5;
+//constexpr double dgain = 30;
+
+constexpr double pgain = 3;
+constexpr double igain = .5;
+constexpr double dgain = 6;
+
+
+constexpr double top_speed = 150;
+
+// Number of samples taken to calibrate the gyroscope
+const int n_samples = 200;
+
+// END OF CONFIG
+
+
 
 // UTIL
 constexpr double to_deg = 180.0 / M_PI;
+constexpr double period_seconds = period_us * 1.0e-6;
+
 
 // GLOBALS
-
-double gangle, adjuster, pid_i, pidde, y_g_calibration;
-byte balance;
+byte remote;
+double pv, adjuster, sp, prev_err, y_g_calibration;
+double pid_p, pid_i, pid_d;
+bool balance;
+int remote_counter;
 int stepr = 0,
     pulsecountr = 0,
     pulsememr = 0;
 int stepl = 0,
     pulsecountl = 0,
     pulsememl = 0;
-
-int remote, remote_counter;
-
 unsigned long loop_time;
 
+
+//setup//////////////////////////////////////////////////////////
 void setup()
 {
-  Serial.begin(BAUD);
+  Serial.begin(9600);
+  hco6.begin(9600);
   Wire.begin();
 
   // set i2c clock frequency
@@ -81,7 +100,7 @@ void setup()
   pinMode(5, OUTPUT);
   pinMode(13, OUTPUT);
 
-  // configure device
+  // configure imu
   Wire.beginTransmission(lsm);
   Wire.write(CTRL_REG1_G);
   Wire.write(0b10100010);
@@ -107,7 +126,7 @@ void setup()
   y_g_calibration /= n_samples;
   loop_time = micros() + 4000;
 
-  // timer registers
+  // configure timer2 registers
   #ifndef NOINTERRUPT
   TCNT2 = 0;
   TCCR2A = 0;
@@ -119,6 +138,7 @@ void setup()
   #endif
 }
 
+//loop///////////////////////////////////////////////////////////////
 void loop()
 {
   #ifdef NOINTERRUPT
@@ -127,19 +147,22 @@ void loop()
   #else
   if (loop_time > micros())
     return;
-  loop_time += loop_time_length;
+  loop_time += period_us;
   #endif
 
-  if(Serial.avialable()){
-    remote = Serial.read();
+  //read bytes from bluetooth module
+  if(hco6.available()){
+    remote = hco6.read();
     remote_counter = 0;
   }
+
+  //bytes from the remote will be good for 25 loops
   if(remote_counter <= 25) remote_counter ++;
   else remote_counter = 0;
   
 
 
-  // read from accelerometer
+  // read imu data
   Wire.beginTransmission(lsm);
   Wire.write(axl);
   Wire.endTransmission();
@@ -148,16 +171,6 @@ void loop()
   const int raxh = Wire.read();
   const int ax_value = (raxh << 8) | raxl;
 
-  double ax = -ax_value/8200.0;
-  if (ax > 1.0) {
-    ax = 1.0;
-  }
-  else if (ax < -1.0)
-  {
-    ax = -1.0;
-  }
-
-  // read from gyroscope
   Wire.beginTransmission(lsm);
   Wire.write(gyl);
   Wire.endTransmission();
@@ -165,8 +178,19 @@ void loop()
   const int rgyl = Wire.read();
   const int rgyh = Wire.read();
   const int gy_value = (rgyh << 8) | rgyl;
-
+  
+  //make data nice
+  double ax = -ax_value/8200.0;
   double gy = gy_value - y_g_calibration;
+
+  if (ax > 1.0) {
+    ax = 1.0;
+  }
+  else if (ax < -1.0) {
+    ax = -1.0;
+  }
+
+  double aangle = asin(ax) * to_deg;
 
   /*
   Serial.println(ax);
@@ -175,43 +199,49 @@ void loop()
   delay(20);
   //*/
 
-  double aangle = asin(ax) * to_deg;
+ 
 
   if (balance == 0 && aangle > -balance_window && aangle < balance_window)
   {
-    gangle = aangle;
+    pv = aangle;
     balance = 1;
   }
 
-  gangle += gy * 0.000031;
-  gangle = gangle * 0.9996 + aangle * 0.0004;
-  //gangle = aangle;
+  pv += gy * 0.000031;
+  //pv += gy * period_seconds;
+  pv = pv * 0.9996 + aangle * 0.0004;
+  //pv = pv * 0.99 + aangle * 0.01;
+  //pv = aangle;
 
   //pid
-  double err = gangle - adjuster;
+  double err = pv - adjuster;
+
+  pid_p = pgain * err;
   pid_i += igain * err;
-  const double pid_p = pgain * err;
-  double output = pid_p + pid_i + dgain * (err - pidde);
+  pid_d = dgain * (err - prev_err);
+  double output = pid_p + pid_i + pid_d;
 
   if (output > 500)
     output = 500;
   else if (output < -500)
     output = -500;
 
-  pidde = err;
+  prev_err = err;
 
   if (output < 5 && output > -5)
   {
     output = 0;
   }
 
-  if (gangle < -30 || gangle > 30 || balance == 0)
+  if (pv < -30 || pv > 30 || balance == 0)
   {
     output = 0;
     pid_i = 0;
     balance = 0;
     adjuster = 0;
   }
+
+  
 
   /*
   Serial.println(output);
@@ -226,6 +256,36 @@ void loop()
 */
   double motl = calc_mot(output);
   double motr = motl; // calc_mot(output);
+  
+  //remote control
+  if(remote & 0b00000001)
+  {
+    if(adjuster > -2.5)adjuster -= 0.05;
+    if(output > -1 * top_speed)adjuster -= 0.005;
+  }
+
+  if(remote & 0b00000010)
+  {
+    if(adjuster < 2.5)adjuster += 0.05;
+    if(output < top_speed)output + 0.005;
+  }
+
+  if(remote & 0b00000100)
+  {
+
+  }
+
+  if(remote & 0b00001000)
+  {
+
+  }
+
+  if(!(remote & 0b00000011))
+  {
+    if(adjuster > 0.5) adjuster -= 0.05;
+    else if (adjuster < -0.5) adjuster += 0.05;
+    else adjuster = 0;
+  }
 
   noInterrupts();
   stepl = motl;
@@ -233,9 +293,12 @@ void loop()
   interrupts();
 }
 
+
 inline double calc_mot(double output) {
   double mot;
-
+//a4988 drivers are set to 1/8th step, and the wheel radius is 204.2mm
+//the robot rotates around 110mm above the ground
+//with some trig, the robot rotates ~ 0.07 degrees per step
   if (output > 0)
     output = 203 - 2750 / (output + 20);
   else if (output < 0)
@@ -255,6 +318,8 @@ inline void toggleBlink() {
   digitalWrite(LED_PIN, !currentValue);
 }
 
+
+//Interrupt service routine to create step pulses
 ISR(TIMER2_COMPA_vect)
 {
   pulsecountl++;
